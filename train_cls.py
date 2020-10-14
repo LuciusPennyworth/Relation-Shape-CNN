@@ -15,6 +15,7 @@ import data.data_utils as d_utils
 import argparse
 import random
 import yaml
+from utils.logger import get_logger
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
@@ -31,19 +32,23 @@ parser = argparse.ArgumentParser(description='Relation-Shape CNN Shape Classific
 parser.add_argument('--config', default='cfgs/config_ssn_cls.yaml', type=str)
 
 def main():
+    global logger
+
     args = parser.parse_args()
     with open(args.config) as f:
-        config = yaml.load(f)
-    print("\n**************************")
+        config = yaml.safe_load(f)
     for k, v in config['common'].items():
         setattr(args, k, v)
-        print('\n[%s]:'%(k), v)
-    print("\n**************************\n")
-    
-    try:
-        os.makedirs(args.save_path)
-    except OSError:
-        pass
+
+    output_dir = args.save_path
+    if output_dir:
+        import time
+        msg = 'init_train'
+        output_dir = os.path.join(output_dir, "train_{}_{}".format(time.strftime("%m_%d_%H_%M_%S"), msg))
+        os.makedirs(output_dir)
+
+    logger = get_logger("RS-CNN", output_dir, prefix="train")
+    logger.info("Running with config:\n{}".format(args))
     
     train_transforms = transforms.Compose([
         d_utils.PointcloudToTensor()
@@ -82,7 +87,7 @@ def main():
     
     if args.checkpoint is not '':
         model.load_state_dict(torch.load(args.checkpoint))
-        print('Load model successfully: %s' % (args.checkpoint))
+        logger.info('Load model successfully: %s' % (args.checkpoint))
 
     criterion = nn.CrossEntropyLoss()
     num_batch = len(train_dataset)/args.batch_size
@@ -123,7 +128,7 @@ def train(train_dataloader, test_dataloader, model, criterion, optimizer, lr_sch
             loss.backward()
             optimizer.step()
             if i % args.print_freq_iter == 0:
-                print('[epoch %3d: %3d/%3d] \t train loss: %0.6f \t lr: %0.5f' %(epoch+1, i, num_batch, loss.data.clone(), lr_scheduler.get_lr()[0]))
+                logger.info('[epoch %3d: %3d/%3d] \t train loss: %0.6f \t lr: %0.5f' %(epoch+1, i, num_batch, loss.data.clone(), lr_scheduler.get_lr()[0]))
             batch_count += 1
             
             # validation in between an epoch
@@ -135,29 +140,31 @@ def validate(test_dataloader, model, criterion, args, iter):
     global g_acc
     model.eval()
     losses, preds, labels = [], [], []
-    for j, data in enumerate(test_dataloader, 0):
-        points, target = data
-        points, target = points.cuda(), target.cuda()
-        points, target = Variable(points, volatile=True), Variable(target, volatile=True)
-        
-        # fastest point sampling
-        fps_idx = pointnet2_utils.furthest_point_sample(points, args.num_points)  # (B, npoint)
-        # fps_idx = fps_idx[:, np.random.choice(1200, args.num_points, False)]
-        points = pointnet2_utils.gather_operation(points.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()
+    with torch.no_grad():
+        for j, data in enumerate(test_dataloader, 0):
+            points, target = data
+            points, target = points.cuda(), target.cuda()
+            points, target = Variable(points,), Variable(target, )
 
-        pred = model(points)
-        target = target.view(-1)
-        loss = criterion(pred, target)
-        losses.append(loss.data.clone())
-        _, pred_choice = torch.max(pred.data, -1)
-        
-        preds.append(pred_choice)
-        labels.append(target.data)
+            # fastest point sampling
+            fps_idx = pointnet2_utils.furthest_point_sample(points, args.num_points)  # (B, npoint)
+            # fps_idx = fps_idx[:, np.random.choice(1200, args.num_points, False)]
+            points = pointnet2_utils.gather_operation(points.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()
+
+            pred = model(points)
+            target = target.view(-1)
+            loss = criterion(pred, target)
+            losses.append(loss.data.clone())
+            _, pred_choice = torch.max(pred.data, -1)
+
+            preds.append(pred_choice)
+            labels.append(target.data)
         
     preds = torch.cat(preds, 0)
     labels = torch.cat(labels, 0)
-    acc = (preds == labels).sum() / labels.numel()
-    print('\nval loss: %0.6f \t acc: %0.6f\n' %(np.array(losses).mean(), acc))
+
+    acc = (preds == labels).sum().item() / labels.numel()
+    logger.info('val loss: %0.6f \t acc: %0.6f\n' %(np.array(losses).mean(), acc))
     if acc > g_acc:
         g_acc = acc
         torch.save(model.state_dict(), '%s/cls_ssn_iter_%d_acc_%0.6f.pth' % (args.save_path, iter, acc))

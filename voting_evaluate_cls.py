@@ -91,7 +91,7 @@ def main():
     
         preds = torch.cat(preds, 0)
         labels = torch.cat(labels, 0)
-        acc = (preds == labels).sum() / labels.numel()
+        acc = (preds == labels).sum().item() / labels.numel()
         if acc > global_acc:
             global_acc = acc
         print('Repeat %3d \t Acc: %0.6f' % (i + 1, acc))

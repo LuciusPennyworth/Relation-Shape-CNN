@@ -1,1 +1,9 @@
 .idea
+build/
+data/__pycache__/
+models/__pycache__/
+utils/__pycache__/
+utils/_ext/__pycache__/
+utils/_ext/pointnet2/__pycache__/
+utils/_ext/pointnet2/_pointnet2.so
+utils/pytorch_utils/__pycache__/
